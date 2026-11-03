@@ -58,6 +58,9 @@ async function ProjectDetails({ params, projects }: ProjectPageProps & { project
   if (!project) notFound();
 
   const media = [project.cover, ...project.gallery];
+  const comparison = project.beforeAfter?.before?.src && project.beforeAfter?.after?.src
+    ? project.beforeAfter
+    : null;
 
   return (
       <main className="min-h-screen bg-[#0b1118] pt-[72px] md:pt-[88px]">
@@ -113,9 +116,9 @@ async function ProjectDetails({ params, projects }: ProjectPageProps & { project
             </section>
           )}
 
-          {project.beforeAfter && (
-            <div className="mt-16 lg:mt-24">
-              <BeforeAfterSlider before={project.beforeAfter.before} after={project.beforeAfter.after} />
+          {comparison && (
+            <div className="mx-auto mt-12 max-w-[820px] lg:mt-16">
+              <BeforeAfterSlider before={comparison.before} after={comparison.after} />
             </div>
           )}
 

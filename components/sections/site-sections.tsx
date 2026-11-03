@@ -19,13 +19,20 @@ function ImagePlaceholder({
   src?: string;
   alt?: string;
 }) {
+  if (src) {
+    return (
+      <div className={`relative isolate overflow-hidden rounded-2xl bg-[#111b26] shadow-[0_24px_70px_rgba(0,0,0,0.3)] ${className}`}>
+        <Image src={src} alt={alt} fill sizes="(min-width: 1024px) 50vw, 100vw" className="object-contain" />
+      </div>
+    );
+  }
+
   return (
     <div
       role="img"
       aria-label={`Image placeholder: ${label}`}
       className={`group relative isolate overflow-hidden border border-white/10 bg-[#111b26] ${className}`}
     >
-      {src && <Image src={src} alt={alt} fill sizes="(min-width: 1024px) 50vw, 100vw" className="-z-10 object-cover" />}
       <div
         aria-hidden="true"
         className="absolute inset-0 -z-10 bg-[radial-gradient(ellipse_at_70%_25%,rgba(245,166,35,0.14),transparent_42%),linear-gradient(135deg,#182633,#0b1118_70%)]"
@@ -61,6 +68,7 @@ function SectionShell({
   title,
   description,
   tone = "dark",
+  compactHeader = false,
   children,
 }: {
   id: string;
@@ -69,6 +77,7 @@ function SectionShell({
   title: string;
   description?: string;
   tone?: "dark" | "light";
+  compactHeader?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -90,7 +99,7 @@ function SectionShell({
         </aside>
 
         <div className="min-w-0">
-          <header className="mb-10 max-w-4xl sm:mb-14">
+          <header className={`max-w-4xl ${compactHeader ? "mb-6 sm:mb-6" : "mb-10 sm:mb-14"}`}>
             <h2 className="text-3xl font-black uppercase leading-[1.04] tracking-[-0.045em] text-white sm:text-4xl md:text-5xl lg:text-6xl">
               {title}
             </h2>
@@ -116,8 +125,9 @@ export function AboutSection({ content = defaultContent }: { content?: ManagedSi
       title={content.about.title}
       description={content.about.description}
       tone="light"
+      compactHeader
     >
-      <div className="grid items-stretch gap-8 lg:grid-cols-[0.88fr_1.12fr] lg:gap-12">
+      <div className="grid items-start gap-8 lg:grid-cols-[0.88fr_1.12fr] lg:gap-12">
         <div className="flex flex-col justify-between gap-8">
           <div>
             <p className="text-xs font-bold uppercase tracking-[0.18em] text-primary">
@@ -144,7 +154,7 @@ export function AboutSection({ content = defaultContent }: { content?: ManagedSi
             </div>
           </div>
         </div>
-        <ImagePlaceholder label="Company or team image" className="aspect-[16/10] min-h-[250px] lg:aspect-auto" src={content.about.image?.src} alt={content.about.image?.alt} />
+        <ImagePlaceholder label="Company or team image" className="aspect-video w-full" src={content.about.image?.src} alt={content.about.image?.alt} />
       </div>
     </SectionShell>
   );

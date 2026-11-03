@@ -2,6 +2,7 @@ export type ProjectImage = {
   type: "image";
   src: string;
   alt: string;
+  assetId?: string;
 };
 
 export type ProjectVideo = {
@@ -9,6 +10,7 @@ export type ProjectVideo = {
   src: string;
   title: string;
   poster?: string;
+  assetId?: string;
 };
 
 export type ProjectMedia = ProjectImage | ProjectVideo;

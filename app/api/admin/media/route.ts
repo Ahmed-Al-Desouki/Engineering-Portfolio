@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createHash } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
 import { projectMediaLimits } from "@/lib/projects";
 import { cloudinaryAdminAuth, cloudinaryAdminUrl, cloudinaryConfig, signCloudinaryParams, verifyCloudinaryResponse } from "@/lib/cloudinary/server";
@@ -53,16 +54,42 @@ export async function POST(request: Request) {
     if (action === "sign") {
       const mimeType = String(body.mimeType ?? "");
       const bytes = Number(body.bytes);
-      const fileName = String(body.fileName ?? "").toLowerCase().replace(/\.[^.]+$/, "").replace(/[^a-z0-9-]+/g, "-").replace(/^-|-$/g, "").slice(0, 72) || "asset";
+      const contentHash = String(body.contentHash ?? "");
       const resourceType = imageTypes.has(mimeType) ? "image" : videoTypes.has(mimeType) ? "video" : "";
       if (!resourceType) return NextResponse.json({ error: "Choose a JPG, PNG, WebP, AVIF, MP4, WebM, or MOV file." }, { status: 400 });
+      if (!/^[a-f0-9]{64}$/.test(contentHash)) return NextResponse.json({ error: "Could not identify this file. Please choose it again." }, { status: 400 });
       const limit = resourceType === "video" ? projectMediaLimits.videoBytes : projectMediaLimits.imageBytes;
       if (!Number.isInteger(bytes) || bytes <= 0 || bytes > limit) return NextResponse.json({ error: `This file exceeds the ${Math.round(limit / 1024 / 1024)} MB ${resourceType} limit.` }, { status: 400 });
+      const { cloudName, apiKey, apiSecret } = cloudinaryConfig();
+      const publicId = `valex-${resourceType}-${contentHash}`;
+      const { data: existing, error: existingError } = await auth.supabase.from("media_assets").select("asset_id,project_slug,public_id,secure_url,resource_type,bytes,format").eq("public_id", publicId).maybeSingle();
+      if (existingError) throw new Error(existingError.message);
+      if (existing) return NextResponse.json({ existing: {
+        assetId: existing.asset_id, projectSlug: existing.project_slug, publicId: existing.public_id,
+        url: existing.secure_url, resourceType: existing.resource_type, size: Number(existing.bytes),
+        format: existing.format, mimeType: `${existing.resource_type}/${existing.format}`,
+      } });
+      // Older uploads used random public IDs. Check same-sized files in this
+      // folder against their original Cloudinary bytes so those can be reused too.
+      const { data: legacyCandidates, error: candidateError } = await auth.supabase.from("media_assets")
+        .select("asset_id,project_slug,public_id,secure_url,resource_type,bytes,format")
+        .eq("resource_type", resourceType).eq("bytes", bytes).limit(20);
+      if (candidateError) throw new Error(candidateError.message);
+      for (const candidate of legacyCandidates ?? []) {
+        if (!candidate.secure_url.startsWith(`https://res.cloudinary.com/${cloudName}/`)) continue;
+        const response = await fetch(candidate.secure_url, { cache: "no-store" });
+        if (!response.ok) continue;
+        const contents = Buffer.from(await response.arrayBuffer());
+        if (contents.byteLength !== bytes || createHash("sha256").update(contents).digest("hex") !== contentHash) continue;
+        return NextResponse.json({ existing: {
+          assetId: candidate.asset_id, projectSlug: candidate.project_slug, publicId: candidate.public_id,
+          url: candidate.secure_url, resourceType: candidate.resource_type, size: Number(candidate.bytes),
+          format: candidate.format, mimeType: `${candidate.resource_type}/${candidate.format}`,
+        } });
+      }
       const currentBytes = await getProjectMediaBytes(auth.supabase, slug);
       if (currentBytes + bytes > projectMediaLimits.projectBytes) return NextResponse.json({ error: "This folder would exceed its 100 MB total media limit." }, { status: 400 });
-      const { cloudName, apiKey, apiSecret } = cloudinaryConfig();
       const timestamp = Math.floor(Date.now() / 1000);
-      const publicId = `${crypto.randomUUID()}-${fileName}`;
       const params = { folder, public_id: publicId, timestamp };
       return NextResponse.json({ cloudName, apiKey, timestamp, folder, publicId, resourceType, signature: signCloudinaryParams(params, apiSecret) });
     }
@@ -81,10 +108,20 @@ export async function POST(request: Request) {
 
       const assetLookupUrl = cloudinaryAdminUrl(`resources/by_asset_ids?asset_ids%5B%5D=${encodeURIComponent(assetId)}`);
       const assetResponse = await fetch(assetLookupUrl, { headers: { Authorization: cloudinaryAdminAuth() }, cache: "no-store" });
-      if (!assetResponse.ok) return NextResponse.json({ error: "Could not verify the uploaded file in Cloudinary." }, { status: 502 });
-      const assetResult = await assetResponse.json() as { resources?: { asset_id: string; public_id: string; asset_folder?: string; secure_url: string; resource_type: string; bytes: number; format: string }[] };
+      const assetResult = await assetResponse.json().catch(() => ({})) as { resources?: { asset_id: string; public_id: string; asset_folder?: string; folder?: string; secure_url: string; resource_type: string; bytes: number; format: string }[]; error?: { message?: string } };
+      if (!assetResponse.ok) {
+        const details = assetResult.error?.message;
+        return NextResponse.json({ error: details ? `Cloudinary verification failed: ${details}` : "Cloudinary could not verify the uploaded file. Check the Cloudinary API key and secret." }, { status: 502 });
+      }
       const asset = assetResult.resources?.find((item) => item.asset_id === assetId);
-      if (!asset || asset.public_id !== publicId || asset.resource_type !== resourceType || asset.asset_folder !== folder || !asset.secure_url.startsWith(`https://res.cloudinary.com/${cloudName}/`)) return NextResponse.json({ error: "Cloudinary asset details did not match the signed upload." }, { status: 400 });
+      const expectedAsset = Boolean(asset && asset.public_id === publicId && asset.resource_type === resourceType && asset.secure_url.startsWith(`https://res.cloudinary.com/${cloudName}/`));
+      if (!expectedAsset || !asset) return NextResponse.json({ error: "Cloudinary returned asset information that does not match this upload." }, { status: 400 });
+      const actualFolder = asset?.asset_folder ?? asset?.folder;
+      const folderMatches = actualFolder === folder || asset?.public_id.startsWith(`${folder}/`);
+      if (!folderMatches) {
+        await destroyCloudinaryAsset(assetId);
+        return NextResponse.json({ error: "Cloudinary uploaded the file, but its returned folder or asset details did not match. Confirm the Cloudinary folder mode and retry." }, { status: 400 });
+      }
 
       const limit = resourceType === "video" ? projectMediaLimits.videoBytes : projectMediaLimits.imageBytes;
       if (asset.bytes > limit) {
@@ -101,7 +138,10 @@ export async function POST(request: Request) {
         secure_url: asset.secure_url, resource_type: asset.resource_type,
         bytes: asset.bytes, format: asset.format, uploaded_by: auth.user.id,
       });
-      if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+      if (error) {
+        await destroyCloudinaryAsset(asset.asset_id);
+        return NextResponse.json({ error: `The file reached Cloudinary but its database record could not be saved: ${error.message}` }, { status: 400 });
+      }
       return NextResponse.json({ item: { assetId: asset.asset_id, projectSlug: slug, publicId: asset.public_id, url: asset.secure_url, resourceType: asset.resource_type, size: asset.bytes, format: asset.format, mimeType: `${asset.resource_type}/${asset.format}` } });
     }
 
@@ -112,10 +152,9 @@ export async function POST(request: Request) {
 }
 
 async function destroyCloudinaryAsset(assetId: string) {
-  const response = await fetch(cloudinaryAdminUrl("resources"), {
+  const response = await fetch(cloudinaryAdminUrl(`resources?asset_ids%5B%5D=${encodeURIComponent(assetId)}`), {
     method: "DELETE",
-    headers: { Authorization: cloudinaryAdminAuth(), "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ "asset_ids[]": assetId }),
+    headers: { Authorization: cloudinaryAdminAuth() },
   });
   if (!response.ok) throw new Error("Cloudinary could not remove the asset.");
 }

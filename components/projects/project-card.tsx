@@ -2,6 +2,19 @@ import Image from "next/image";
 import Link from "next/link";
 import type { Project } from "@/lib/projects";
 
+function videoThumbnail(src: string) {
+  try {
+    const url = new URL(src);
+    if (url.hostname !== "res.cloudinary.com" || !url.pathname.includes("/video/upload/")) return "";
+    url.pathname = url.pathname
+      .replace("/video/upload/", "/video/upload/so_0.5/")
+      .replace(/\.(mp4|webm|mov|m4v)$/i, ".jpg");
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
 export default function ProjectCard({
   project,
   slot,
@@ -25,14 +38,27 @@ export default function ProjectCard({
             sizes="(min-width: 1280px) 30vw, (min-width: 768px) 45vw, 90vw"
             className="object-cover transition-transform duration-700 group-hover:scale-[1.035]"
           />
-        ) : project?.cover.type === "video" && project.cover.poster ? (
-          <Image
-            src={project.cover.poster}
-            alt=""
-            fill
-            sizes="(min-width: 1280px) 30vw, (min-width: 768px) 45vw, 90vw"
-            className="object-cover transition-transform duration-700 group-hover:scale-[1.035]"
-          />
+        ) : project?.cover.type === "video" ? (
+          project.cover.poster || videoThumbnail(project.cover.src) ? (
+            <Image
+              src={project.cover.poster || videoThumbnail(project.cover.src)}
+              alt=""
+              fill
+              sizes="(min-width: 1280px) 30vw, (min-width: 768px) 45vw, 90vw"
+              className="object-cover transition-transform duration-700 group-hover:scale-[1.035]"
+            />
+          ) : (
+            <video
+              src={project.cover.src}
+              autoPlay
+              muted
+              loop
+              playsInline
+              preload="metadata"
+              aria-hidden="true"
+              className="size-full object-cover transition-transform duration-700 group-hover:scale-[1.035]"
+            />
+          )
         ) : (
           <div aria-hidden="true" className="absolute inset-0 bg-[radial-gradient(ellipse_at_70%_25%,rgba(245,166,35,0.15),transparent_42%),linear-gradient(135deg,#182633,#0b1118_70%)]" />
         )}
